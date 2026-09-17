@@ -193,7 +193,7 @@ prompt 0: 14 tokens | actions bitwise eager=True graph=True | eager 25.44 ms, gr
 prompt 1: 8 tokens | actions bitwise eager=True graph=True | eager 27.00 ms, graph 25.79 ms
 prompt 2: 14 tokens | actions bitwise eager=True graph=True | eager 25.44 ms, graph 24.00 ms
 prompt 3: 6 tokens | actions bitwise eager=True graph=True | eager 25.40 ms, graph 23.98 ms
-M6_PROMPT_ENGINE_PASS
+ENGINE_PROMPT_DYNAMIC_PASS
 ```
 
 `bitwise=True` means the engine's actions equal FlashRT's runtime exactly, eagerly and under a CUDA graph.
