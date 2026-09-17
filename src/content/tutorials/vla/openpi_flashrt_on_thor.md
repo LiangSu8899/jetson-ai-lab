@@ -103,7 +103,7 @@ pip install torch --index-url https://pypi.jetson-ai-lab.io/sbsa/cu132
 
 git clone -b feat/tensorrt-backend https://github.com/flashrt-project/FlashRT.git ~/FlashRT
 cd ~/FlashRT
-git submodule update --init third_party/cutlass
+git clone --depth 1 --branch v4.4.2 https://github.com/NVIDIA/cutlass.git third_party/cutlass
 
 cmake -B build -S . -DGPU_ARCH=110
 cmake --build build -j8
@@ -340,7 +340,7 @@ then repeat Step 5. The build script's bitwise check confirms the new engine sti
 |---|---|
 | `Plugin not found, are the plugin name, version, and namespace correct?` | pass the library with `--dynamicPlugins` (not `--staticPlugins`), or load it into the plugin registry first |
 | `Failed to deserialize` / engine version error | the engine was built with a different TensorRT; rebuild it from ONNX where you run it (Step 5) |
-| `CUTLASS v4.4.2 not found` | `git submodule update --init third_party/cutlass` |
+| `CUTLASS v4.4.2 not found` | clone CUTLASS v4.4.2 into `third_party/cutlass` (Step 1) |
 | NVVM error `-arch=compute_a is an unsupported option` when FA4 compiles | `export CUTE_DSL_ARCH=sm_101a` (the build script sets it) |
 | Engine check reports `bitwise=False` with differences around 1e-5 | the process loaded a different cuBLAS than PyTorch's; accuracy is unaffected |
 | Latency ~2 ms higher for some prompts | decoder attention cuBLAS kernels are slower when `522 + prompt tokens` (rounded up to even) is not a multiple of 8 |
