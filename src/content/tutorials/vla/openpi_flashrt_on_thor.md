@@ -23,27 +23,29 @@ This tutorial builds on [OpenPi π₀.₅ on Jetson Thor](/tutorials/openpi_on_t
 
 ## Performance
 
-Jetson AGX Thor Developer Kit, JetPack 7.2, MAXN, `pi05_libero`, action horizon 10, openpi `policy.infer` in the tutorial container, medians of 100 calls:
+Measured with the OpenPi tutorial's own benchmark, `deployment_scripts/pi05_inference.py` (synthetic LIBERO example, 3 warmup + 10 timed runs, mean ± std), on the same Jetson AGX Thor Developer Kit (JetPack 7.2, MAXN), `pi05_libero`, action horizon 10:
 
-| Engine | Prompt | Model Latency (ms) | Total Latency (ms) |
+| Inference Backend | Total Latency (ms) | Model Latency (ms) | Speedup |
 |---|---|---|---|
-| TensorRT FP8 + NVFP4 (OpenPi tutorial) | "put the bowl on the plate" | 47.96 | 48.71 |
-| **TensorRT + FlashRT plugins** | "put the bowl on the plate" | **25.86** | **26.59** |
-| **TensorRT + FlashRT plugins** | "put the white mug on the left plate and put the yellow and white mug on the right plate" | **24.08** | **24.82** |
+| PyTorch BF16 | 132.08 ± 0.67 | 128.66 ± 0.50 | 1.0x |
+| TensorRT FP8 + NVFP4 (OpenPi tutorial) | 48.83 ± 0.06 | 48.12 ± 0.04 | 2.7x |
+| **TensorRT + FlashRT plugins** | **26.77 ± 0.05** | **26.02 ± 0.05** | **4.9x** |
 
-Action accuracy against the openpi PyTorch model (bf16), 8 LIBERO observations, pinned noise, cosine similarity over the 7 action dimensions:
+The OpenPi tutorial engine row reproduces the tutorial's published result (48.84 / 48.08 ms). Step 6.1 runs both engines through the same script.
 
-| Engine | Mean | Min |
+Action accuracy against the openpi PyTorch model (BF16) on 8 real LIBERO observations with their task prompts and pinned noise, cosine similarity of the raw actions over the 7 action dimensions (Step 6.2):
+
+| Inference Backend | Mean | Min |
 |---|---|---|
 | TensorRT FP8 + NVFP4 (OpenPi tutorial) | 0.99962 | 0.99945 |
 | **TensorRT + FlashRT plugins** | **0.99968** | **0.99946** |
 
 Where the speedup comes from:
 
-- **Kernels.** At the tutorial engine's own shape (three camera slots, 208 tokens), `trtexec --useCudaGraph` measures 32.69 ms for the FlashRT engine against 47.76 ms. FlashRT's fused kernels merge what TensorRT runs as separate layers — for example the encoder FFN's gate and up projections, GeGLU and the activation quantization run as one NVFP4 kernel.
+- **Kernels.** At the tutorial engine's own shape (three camera slots, 208 prompt tokens), `trtexec --useCudaGraph` measures 32.69 ms for the FlashRT engine against 47.76 ms. FlashRT's fused kernels merge what TensorRT runs as separate layers — for example the encoder FFN's gate and up projections, GeGLU and the activation quantization run as one NVFP4 kernel.
 - **Shape.** LIBERO masks the third camera and pads the prompt; the FlashRT engine does not compute the masked camera or the padding.
 
-The FlashRT engine's actions are bit-for-bit identical to FlashRT's own PyTorch runtime, which runs the same shape at the same speed.
+The FlashRT engine's actions are bit-for-bit identical to FlashRT's own PyTorch runtime, which runs the same shape at the same speed. Latency varies by about 2 ms with prompt length (24–26 ms model time on LIBERO prompts, see Troubleshooting).
 
 ## How it works
 
@@ -253,25 +255,40 @@ print(result["actions"].shape, result["policy_timing"])   # (10, 7)
 
 The first call captures a CUDA graph for the prompt length; later calls replay it.
 
-### 6.1 Benchmark against the OpenPi tutorial engine
+### 6.1 Benchmark with the OpenPi tutorial's script
+
+Run the OpenPi tutorial's `pi05_inference.py` for both engines. For the FlashRT engine, `run_official_pi05_inference.py` runs the same script unchanged and only points its TensorRT hook at the FlashRT engine:
 
 ```bash
-B=/flashrt/backends/tensorrt/integrations/openpi/benchmark_openpi.py
 C=/root/.cache/openpi/openpi-assets/checkpoints/pi05_libero_pytorch
 
-python $B /flashrt_out/libero_calib_8.npz $C /flashrt_out/pi05_libero_container.engine \
-  --plugin /flashrt/build/tensorrt/libflashrt_trt_pi05.so --index 4
-python $B /flashrt_out/libero_calib_8.npz $C $C/engine/model_fp8_nvfp4.engine --index 4
+# OpenPi tutorial engine (Step 10 of the OpenPi tutorial)
+python deployment_scripts/pi05_inference.py \
+  --config-name pi05_libero --checkpoint-dir $C \
+  --engine-path $C/engine/model_fp8_nvfp4.engine \
+  --inference-mode tensorrt --num-warmup 3 --num-test-runs 10
+
+# FlashRT plugin engine
+FLASHRT_TRT_PLUGIN=/flashrt/build/tensorrt/libflashrt_trt_pi05.so \
+python /flashrt/backends/tensorrt/integrations/openpi/run_official_pi05_inference.py \
+  --config-name pi05_libero --checkpoint-dir $C \
+  --engine-path /flashrt_out/pi05_libero_container.engine \
+  --inference-mode tensorrt --num-warmup 3 --num-test-runs 10
 ```
 
+Expected results:
+
 ```
-FlashRT engine: prompt 'put the bowl on the plate' | model median 25.86 ms | total median 26.59 ms | actions (10, 7)
-tutorial engine: prompt 'put the bowl on the plate' | model median 47.96 ms | total median 48.71 ms | actions (10, 7)
+# OpenPi tutorial engine
+Total inference time: 48.83 ± 0.06 ms
+Model inference time: 48.12 ± 0.04 ms
+
+# FlashRT plugin engine
+Total inference time: 26.77 ± 0.05 ms
+Model inference time: 26.02 ± 0.05 ms
 ```
 
-Use the engine path you built in Step 10 of the OpenPi tutorial for the second command.
-
-### 6.2 Compare accuracy against PyTorch
+### 6.2 Compare accuracy against PyTorch on real observations
 
 ```bash
 python /flashrt/backends/tensorrt/integrations/openpi/compare_openpi_accuracy.py \
@@ -284,6 +301,10 @@ python /flashrt/backends/tensorrt/integrations/openpi/compare_openpi_accuracy.py
 FlashRT engine   vs openpi PyTorch, cosine over 7 action dims: mean 0.99968 min 0.99946 ...
 tutorial engine  vs openpi PyTorch, cosine over 7 action dims: mean 0.99962 min 0.99945 ...
 ```
+
+Each observation uses its own LIBERO task prompt and fixed noise; both engines and PyTorch see identical inputs. The observations are the 8 frames sampled in Step 3.
+
+> **Note:** `pi05_inference.py --inference-mode compare` also works through `run_official_pi05_inference.py`. Its synthetic example uses random pixel images, which are far from the real observations both engines are calibrated on, and a new random example on every run unless NumPy is seeded (`EXAMPLE_SEED=<n>`), so its cosine is only comparable between runs with the same seed.
 
 
 ## (Optional) Other Ways to Run the Engine
@@ -322,7 +343,7 @@ then repeat Step 5. The build script's bitwise check confirms the new engine sti
 | `CUTLASS v4.4.2 not found` | `git submodule update --init third_party/cutlass` |
 | NVVM error `-arch=compute_a is an unsupported option` when FA4 compiles | `export CUTE_DSL_ARCH=sm_101a` (the build script sets it) |
 | Engine check reports `bitwise=False` with differences around 1e-5 | the process loaded a different cuBLAS than PyTorch's; accuracy is unaffected |
-| Latency ~1.5 ms higher for some prompts | decoder attention cuBLAS kernels are slower when `266 + prompt tokens` is not a multiple of 8 |
+| Latency ~2 ms higher for some prompts | decoder attention cuBLAS kernels are slower when `522 + prompt tokens` (rounded up to even) is not a multiple of 8 |
 
 
 ## References
